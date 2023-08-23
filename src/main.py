@@ -1,4 +1,4 @@
-import asyncio, enum, json
+import asyncio, enum, json, datetime, traceback
 from typing import List, Optional, Type, Union, Any
 from pydantic import BaseModel
 
@@ -113,21 +113,6 @@ class HeaderParam:
     def __repr__(self) -> str:
         return str(self)
 
-class CookiesParam:
-    def __init__(
-        self,
-        name: str,
-        val: Any
-    ) -> None:
-        self.name = name
-        self.value = val
-    
-    def __str__(self) -> str:
-        return f"{self.name}={self.value}"
-    
-    def __repr__(self) -> str:
-        return str(self)
-
 class Body:
     def __init__(
         self,
@@ -140,59 +125,143 @@ class Body:
     
     def __repr__(self) -> str:
         return str(self)
+    
+class Cookie:
+    def __init__(
+        self,
+        name: str,
+        value: str,
+        expires: Optional[datetime.datetime] = None,
+        max_age: Optional[int] = None,
+        domain: Optional[str] = None,
+        path: Optional[str] = None,
+        same_site: Optional[str] = None,
+        priority: Optional[str] = None,
+        secure: bool = False,
+        http_only: bool = False
+    ) -> None:
+        self.name = name
+        self.value = value
+        self.expires = expires
+        self.max_age = max_age
+        self.domain = domain
+        self.path = path
+        self.same_site = same_site
+        self.priority = priority
+        self.secure = secure
+        self.http_only = http_only
+
+    def __str__(self) -> str:
+        s = ""
+        s += f"{self.name}={self.value}"
+        if self.expires is not None:
+            s += f"; Expires={self.expires.isoformat()}"
+        if self.max_age is not None:
+            s += f"; Max-Age={self.max_age}"
+        if self.domain is not None:
+            s += f"; Domain={self.domain}"
+        if self.path is not None:
+            s += f"; Path={self.path}"
+        if self.same_site is not None:
+            s += f"; SameSite={self.same_site}"
+        if self.priority is not None:
+            s += f"; Priority={self.priority}"
+        if self.secure:
+            s += f"; Secure"
+        if self.http_only:
+            s += f"; HttpOnly"
+        return s
 
 class Cookies:
-    def __init__(self, cookie_params: List[CookiesParam] = []) -> None:
+    def __init__(self, cookie_params: List[Cookie] = []) -> None:
         self._params = {c.name: c for c in cookie_params}
 
     def __str__(self) -> str:
         s = ""
-        size = len(self._params)
-        for i, cookie in enumerate(self._params.values()):
-            s += str(cookie)
-            if i != size-1:
-                s += "; "
+        for cookie in self._params.values():
+            s += f"Set-Cookie: {str(cookie)}"
+            s += "\r\n"
         return s
 
     def __repr__(self) -> str:
         return str(self)
+    
+    def add(self, cookie: Cookie) -> None:
+        self._params[cookie.name] = cookie
 
     @classmethod
     def from_string(cls, s: str) -> "Cookies":
         cookies = cls()
         for cookie in s.split("; "):
             [k, v] = cookie.split("=")
-            cookies._params[k.strip()] = CookiesParam(k.strip(), v.strip())
+            cookies._params[k.strip()] = Cookie(k.strip(), v.strip())
         return cookies
+    
+class QueryList:
+    def __init__(self, queries: List[Query] = []) -> None:
+        self._queries = {q.name: q for q in queries}
+
+    @property
+    def queries(self) -> List[Query]:
+        return self._queries.values()
+    
+    def add_query(self, name: str, value: Any) -> None:
+        self._queries[name] = {name, Query(name, value)}
+    
+class PathList:
+    def __init__(self, path_params: List[PathParam] = []) -> None:
+        self._path_params = path_params
+
+class Headers:
+    def __init__(self, cookies: Optional[Cookies]=None, header_params: List[HeaderParam] = []) -> None:
+        self.cookies = cookies if cookies is not None else Cookies()
+        self.header_params = {h.name: h for h in header_params}
+
+    def __str__(self) -> str:
+        s = ""
+        for h in self.header_params.values():
+            s += f"{h.name}: {h.value}\r\n"
+        s += str(self.cookies)
+        return s
+    
+    def add_header(self, name: str, value: str) -> None:
+        self.header_params[name] = HeaderParam(name, value)
+
+    def add_cookie(self, cookie=Cookie) -> None:
+        self.cookies.add(cookie)
+
+    def set_cookies(self, cookies=Cookies) -> None:
+        self.cookies = cookies
 
 class Request:
     def __init__(
         self,
         path: str,
         method: Method,
-        queries: List[Query],
-        headers: List[HeaderParam],
-        cookies: Optional[Cookies]=None,
+        queries: QueryList,
+        headers: Headers,
         body: Optional[Body]=None
     ) -> None:
         self.path = path
         self.method = method
-        self.queries = {q.name: q for q in queries}
-        self.headers = {h.name: h for h in headers}
-        self.cookies = cookies
+        self.queries = queries
+        self.headers = headers
         self.body = body
+
+    @property
+    def cookies(self) -> Cookies:
+        return self.headers.cookies
 
     @classmethod
     async def load_from_reader(cls, reader: asyncio.StreamReader) -> "Request":
         request_line = await reader.readuntil(b"\r\n")
         method, path, _ = request_line.decode().strip().split(" ")
-        headers = []
-        queries = []
-        cookies = None
+        headers = Headers()
+        queries = QueryList()
+        cookies = Cookies()
         body = None
         content_length = None
         content_type = None
-
         while True:
             header_line = await reader.readuntil(b"\r\n")
             header = header_line.decode().strip()
@@ -202,19 +271,19 @@ class Request:
             header_name, header_value = header.split(":", 1)
             if header_name.casefold().strip() == "cookie":
                 cookies = Cookies.from_string(header_value)
-                continue
+                headers.set_cookies(cookies)
             if header_name.casefold().strip() == "content-length":
                 content_length = int(header_value.strip())
             if header_name.casefold().strip() == "content-type":
                 content_type = header_value.casefold().strip()
-            headers.append(HeaderParam(header_name.strip(), header_value.strip()))
-
+            headers.add_header(header_name.strip(), header_value.strip())
+        
         if "?" in path:
             path, query_string = path.split("?", 1)
             query_params = query_string.split("&")
             for param in query_params:
                 name, value = param.split("=")
-                queries.append(Query(name, value))
+                queries.add_query(name, value)
         
         if content_length is not None:
             if content_length > 0:
@@ -227,7 +296,6 @@ class Request:
             method,
             queries,
             headers,
-            cookies,
             body
         )
 
@@ -235,36 +303,55 @@ class Response:
     def __init__(
         self,
         status_code: int,
-        headers: List[HeaderParam] = [],
-        cookies: Optional[Cookies] = None,
+        headers: Optional[Headers] = None,
         response_body: Optional[Body] = None
     ) -> None:
         self.status_code = status_code
-        self.headers = headers
-        self.cookies = cookies
+        self.headers = headers if headers is not None else Headers()
         self.reponse_body = response_body
+
+    @property
+    def cookies(self) -> Cookies:
+        return self.headers.cookies
+    
+    def add_cookie(self, cookie: Cookie) -> None:
+        self.headers.add_cookie(cookie)
+    
+    def set_cookies(self, cookies: Cookies) -> None:
+        self.headers.set_cookies(cookies)
+
+    async def write_to_stream(self, writer: asyncio.StreamWriter) -> None:
+        try:
+            print(str(self))
+            writer.write(str(self).encode())
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            writer.write("HTTP/1.1 500 Internal Server\r\n".encode())
+        finally:
+            await writer.drain()
+            writer.close()
 
     def __str__(self) -> str:
         s = f"HTTP/1.1 {self.status_code} {HTTP_STATUS_CODES[self.status_code]}\r\n"
-        for header in self.headers:
-            s += str(header)+"\r\n"
-        if self.cookies is not None:
-            s += "Set-Cookie: " + str(self.cookies) + "\r\n"
+        s += str(self.headers)
         s += "\r\n"
         s += str(self.reponse_body)
         return s 
 
 async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    request = await Request.load_from_reader(reader)
-    response = Response(
-        status_code=200,
-        headers = request.headers.values(),
-        cookies = request.cookies,
-        response_body=request.body
-    )
-    writer.write(str(response).encode())
-    await writer.drain()
-    writer.close()
+    try:
+        request = await Request.load_from_reader(reader)
+        response = Response(
+            status_code=200,
+            headers = Headers(cookies=None, header_params=[HeaderParam("Content-Type", "Application/Json")]),
+            response_body=request.body
+        )
+        await response.write_to_stream(writer)
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
+        await Response(500).write_to_stream(writer)
 
 async def main() -> None:
     server = await asyncio.start_server(handle_request, "localhost", 8080)
