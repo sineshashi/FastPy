@@ -2,8 +2,70 @@ import asyncio, enum, json
 from typing import List, Optional, Type, Union, Any
 from pydantic import BaseModel
 
-class StatusCode(enum.Enum):
-    ...
+HTTP_STATUS_CODES = {
+    100: "Continue",
+    101: "Switching Protocols",
+    102: "Processing",
+
+    200: "OK",
+    201: "Created",
+    202: "Accepted",
+    204: "No Content",
+    205: "Reset Content",
+    206: "Partial Content",
+    207: "Multi-Status",
+    208: "Already Reported",
+    226: "IM Used",
+
+    300: "Multiple Choices",
+    301: "Moved Permanently",
+    302: "Found",
+    303: "See Other",
+    304: "Not Modified",
+    307: "Temporary Redirect",
+    308: "Permanent Redirect",
+
+    400: "Bad Request",
+    401: "Unauthorized",
+    402: "Payment Required",
+    403: "Forbidden",
+    404: "Not Found",
+    405: "Method Not Allowed",
+    406: "Not Acceptable",
+    407: "Proxy Authentication Required",
+    408: "Request Timeout",
+    409: "Conflict",
+    410: "Gone",
+    411: "Length Required",
+    412: "Precondition Failed",
+    413: "Payload Too Large",
+    414: "URI Too Long",
+    415: "Unsupported Media Type",
+    416: "Range Not Satisfiable",
+    417: "Expectation Failed",
+    418: "I'm a teapot",
+    421: "Misdirected Request",
+    422: "Unprocessable Entity",
+    423: "Locked",
+    424: "Failed Dependency",
+    426: "Upgrade Required",
+    428: "Precondition Required",
+    429: "Too Many Requests",
+    431: "Request Header Fields Too Large",
+    451: "Unavailable For Legal Reasons",
+
+    500: "Internal Server Error",
+    501: "Not Implemented",
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+    504: "Gateway Timeout",
+    505: "HTTP Version Not Supported",
+    506: "Variant Also Negotiates",
+    507: "Insufficient Storage",
+    508: "Loop Detected",
+    510: "Not Extended",
+    511: "Network Authentication Required"
+}
 
 class Method(enum.Enum):
     GET = "GET"
@@ -100,7 +162,7 @@ class Cookies:
         cookies = cls()
         for cookie in s.split("; "):
             [k, v] = cookie.split("=")
-            cookies._params[k] = CookiesParam(k, v)
+            cookies._params[k.strip()] = CookiesParam(k.strip(), v.strip())
         return cookies
 
 class Request:
@@ -113,12 +175,12 @@ class Request:
         cookies: Optional[Cookies]=None,
         body: Optional[Body]=None
     ) -> None:
-        self._path = path
-        self._method = method
-        self._queries = {q.name: q for q in queries}
-        self._headers = {h.name: h for h in headers}
-        self._cookies = cookies
-        self._body = body
+        self.path = path
+        self.method = method
+        self.queries = {q.name: q for q in queries}
+        self.headers = {h.name: h for h in headers}
+        self.cookies = cookies
+        self.body = body
 
     @classmethod
     async def load_from_reader(cls, reader: asyncio.StreamReader) -> "Request":
@@ -170,21 +232,37 @@ class Request:
         )
 
 class Response:
-    ...
+    def __init__(
+        self,
+        status_code: int,
+        headers: List[HeaderParam] = [],
+        cookies: Optional[Cookies] = None,
+        response_body: Optional[Body] = None
+    ) -> None:
+        self.status_code = status_code
+        self.headers = headers
+        self.cookies = cookies
+        self.reponse_body = response_body
+
+    def __str__(self) -> str:
+        s = f"HTTP/1.1 {self.status_code} {HTTP_STATUS_CODES[self.status_code]}\r\n"
+        for header in self.headers:
+            s += str(header)+"\r\n"
+        if self.cookies is not None:
+            s += "Set-Cookie: " + str(self.cookies) + "\r\n"
+        s += "\r\n"
+        s += str(self.reponse_body)
+        return s 
 
 async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     request = await Request.load_from_reader(reader)
-
-    addr = writer.get_extra_info("peername")
-    print("Writer Address:", addr)
-
-    response = (
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: application/json\r\n"
-        "\r\n"
-        '{"message": "Hello, world!"}'
+    response = Response(
+        status_code=200,
+        headers = request.headers.values(),
+        cookies = request.cookies,
+        response_body=request.body
     )
-    writer.write(response.encode())
+    writer.write(str(response).encode())
     await writer.drain()
     writer.close()
 
