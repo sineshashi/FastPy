@@ -1,6 +1,7 @@
-import asyncio, enum, json, datetime, traceback
-from typing import List, Optional, Type, Union, Any
+import asyncio, enum, json, datetime, traceback, inspect, re
+from typing import List, Optional, Type, Union, Any, Dict, Tuple, Callable, Set
 from pydantic import BaseModel
+from collections import defaultdict
 
 HTTP_STATUS_CODES = {
     100: "Continue",
@@ -67,7 +68,7 @@ HTTP_STATUS_CODES = {
     511: "Network Authentication Required"
 }
 
-class Method(enum.Enum):
+class Method(str, enum.Enum):
     GET = "GET"
     POST = "POST"
     PUT = "PUT"
@@ -78,10 +79,12 @@ class Query:
     def __init__(
         self,
         name: str,
-        val: Any
+        val: Any,
+        is_pre_defined: bool
     ) -> None:
         self.name = name
         self.value = val
+        self.pre_defined = is_pre_defined
     
     def __str__(self) -> str:
         return f"?{self.name}={self.value}"
@@ -92,17 +95,17 @@ class Query:
 class PathParam:
     def __init__(
         self,
-        # name: str,
+        name: str,
         val: Any
     ) -> None:
-        # self._name = name
+        self._name = name
         self.value = val
 
 class HeaderParam:
     def __init__(
         self,
         name: str,
-        val: str
+        val: Any
     ) -> None:
         self.name = name
         self.value = val
@@ -130,7 +133,7 @@ class Cookie:
     def __init__(
         self,
         name: str,
-        value: str,
+        value: Any,
         expires: Optional[datetime.datetime] = None,
         max_age: Optional[int] = None,
         domain: Optional[str] = None,
@@ -186,8 +189,21 @@ class Cookies:
     def __repr__(self) -> str:
         return str(self)
     
+    def __contains__(self, c: str) -> bool:
+        return c in self._params
+    
+    def get(self, c: str) -> Cookie:
+        return self._params[c]
+    
+    @property
+    def cookie_names(self) -> Set[str]:
+        return set(self._params.keys())
+    
     def add(self, cookie: Cookie) -> None:
         self._params[cookie.name] = cookie
+
+    def update_cookie(self, name: str, value: Any) -> None:
+        self._params[name] = Cookie(name, value)
 
     @classmethod
     def from_string(cls, s: str) -> "Cookies":
@@ -205,8 +221,8 @@ class QueryList:
     def queries(self) -> List[Query]:
         return self._queries.values()
     
-    def add_query(self, name: str, value: Any) -> None:
-        self._queries[name] = {name, Query(name, value)}
+    def add_query(self, name: str, value: Any, pre_defined: bool) -> None:
+        self._queries[name] = {name, Query(name, value, pre_defined)}
     
 class PathList:
     def __init__(self, path_params: List[PathParam] = []) -> None:
@@ -233,6 +249,183 @@ class Headers:
     def set_cookies(self, cookies=Cookies) -> None:
         self.cookies = cookies
 
+class PathInfo:
+    def __init__(
+        self, 
+        route: str,
+        handler: Callable,
+        path_params: Set[str] = set(),
+        query_params: Set[str] = set(),
+        headers: Set[str] = set(),
+        cookies: Set[str] = set(),
+        defaults: Dict[str, Any] = {},
+        var_types: Dict[str, Callable] = {},
+        body: Optional[str] = None
+    ) -> None:
+        self.route = route
+        self.path_params = path_params
+        self.query_params = query_params
+        self.headers = headers
+        self.cookies = cookies
+        self.defaults = defaults
+        self.var_types = var_types
+        self.handler = handler
+        self.body = body
+
+    def verify_query_params(self, **kwargs) -> QueryList:
+        query_list = QueryList()
+        for q in self.query_params:
+            if q not in kwargs and q in self.defaults:
+                raise Exception("Change to better exception.")
+            var_type = self.var_types[q]
+            if q in kwargs:
+                q_val = kwargs.get(q)
+            else:
+                q_val = self.defaults[q]
+            try:
+                q_val = var_type(q_val)
+                query_list.add_query(q, q_val, True)
+            except:
+                raise Exception("Change to better exception.")
+        for extra_q in set(kwargs.keys()).difference(self.query_params):
+            query_list.add_query(extra_q, kwargs[extra_q], False)
+        return query_list
+    
+    def verify_cookies(self, cookies_str: str) -> Cookies:
+        cookies = Cookies.from_string(cookies_str)
+        for c in self.cookies:
+            if c not in cookies and c not in self.defaults:
+                raise Exception("Change to better exception.")
+            var_type = self.var_types[c]
+            if c in cookies:
+                c_val = cookies.get(c).value
+            else:
+                c_val = self.defaults[c]
+            try:
+                cookies.update_cookie(name=c, value=var_type(c_val))
+            except:
+                raise Exception("Change to better exception.")
+        return cookies
+    
+    def verify_headers(self, **kwargs) -> Headers:
+        headers = Headers()
+        for h in self.headers:
+            if h not in kwargs and h not in self.defaults:
+                raise Exception("Change to better exception.")
+            var_type = self.var_types[h]
+            if h in kwargs:
+                h_val = kwargs[h]
+            else:
+                h_val = self.defaults[h]
+            try:
+                h_val = var_type(h_val)
+                headers.add_header(h, h_val)
+            except:
+                raise Exception("Change to better exception.")
+        for extra_h in set(kwargs.keys()).difference(self.headers):
+            if extra_h.casefold() == "cookie":
+                cookies = self.verify_cookies(kwargs[extra_h])
+                headers.set_cookies(cookies)
+            else:
+                headers.add_header(extra_h, kwargs[extra_h])
+        return headers
+    
+    def verify_body(self, name: str, value: Any) -> Body:
+        if self.body is not None and self.body != name:
+            var_type = self.var_types[name]
+            try:
+                return Body(var_type.parse_obj(value))
+            except:
+                raise Exception("Change to better exception.")
+        else:
+            return Body(value)
+
+class RegisteredPaths:
+    def __init__(self) -> None:
+        self.paths: Dict[str, List[PathInfo]] = defaultdict(list)
+
+    def _get_path_params(self, route: str) -> Tuple[str, Tuple[str]]:
+        pattern = r'\{([^{}]+)\}'
+        parts = re.split(pattern, route, 1)
+        variable_names = re.findall(pattern, route)
+        return parts[0], variable_names
+
+    def add_api_route(self, route: str, function: Callable) -> None:
+        original_route, params = self._get_path_params(route)
+        params = set(params)
+        function_details = inspect.getfullargspec(function)
+        annotations = function_details.annotations
+        args = function_details.args
+        defaults = function_details.defaults
+        defaults_dict = {}
+        queries = set()
+        headers = set()
+        cookies = set()
+        body = None
+        for arg, default in zip(args[-len(defaults):], defaults):
+            defaults_dict[arg] = default
+        for varname, _ in annotations.items():
+            default = defaults_dict[varname]
+            if isinstance(default, Headers):
+                headers.add(varname)
+            elif isinstance(default, Cookies):
+                cookies.add(varname)
+            elif default in params:
+                continue
+            elif isinstance(default, BaseModel):
+                body = default
+            else:
+                queries.add(varname)
+        self.paths[original_route].append(PathInfo(
+            route=route,
+            handler=function,
+            path_params=params,
+            query_params=queries,
+            headers=headers,
+            cookies=cookies,
+            defaults=defaults_dict,
+            var_types=annotations,
+            body=body
+        ))
+
+    def get_api_path_info(self, route: str) -> Optional[PathInfo]:
+        if route.endswith("/"):
+            route = route[:-1]
+        parts = route.split("/")
+        i = len(parts) - 1
+        while i >= 0:
+            cnt_path = parts[:i+1].join("/")
+            for pathinfo in self.paths[cnt_path]:
+                pattern = r'\{([^{}]+)\}'
+                match = re.match(pathinfo.route, route)
+                if match:
+                    variable_values = match.groups()
+                    variable_names = re.findall(pattern, pathinfo.route)
+                    for var, var_val in zip(variable_names, variable_values):
+                        if var in pathinfo.path_params:
+                            try:
+                                pathinfo.var_types[var](var_val)
+                            except:
+                                ...
+                    return pathinfo
+            i -= 1 
+        return None
+
+class MethodWisePathsInfo:
+    def __init__(self) -> None:
+        self.paths: Dict[Method, RegisteredPaths] = {
+            method: RegisteredPaths() for method in Method._member_names_
+        }
+    
+    def add_api_route(self, method: Method, route: str, function: Callable) -> None:
+        self.paths[method].add_api_route(route, function)
+
+    def get_api_route_path_info(self, method: Method, route: str) -> Optional[PathInfo]:
+        if "?" in route:
+            idx = route.find("?")
+            return route[:idx]
+        return self.paths[method].get_api_path_info(route)
+    
 class Request:
     def __init__(
         self,
@@ -240,6 +433,7 @@ class Request:
         method: Method,
         queries: QueryList,
         headers: Headers,
+        paths: PathList,
         body: Optional[Body]=None
     ) -> None:
         self.path = path
@@ -253,7 +447,7 @@ class Request:
         return self.headers.cookies
 
     @classmethod
-    async def load_from_reader(cls, reader: asyncio.StreamReader) -> "Request":
+    async def load_from_reader(cls, reader: asyncio.StreamReader, all_path_info: MethodWisePathsInfo) -> "Request":
         request_line = await reader.readuntil(b"\r\n")
         method, path, _ = request_line.decode().strip().split(" ")
         headers = Headers()
@@ -262,6 +456,18 @@ class Request:
         body = None
         content_length = None
         content_type = None
+        path_info = all_path_info.get_api_route_path_info(method, path)
+        if path_info is None:
+            #@TODO raise exception.
+            ...
+
+        if "?" in path:
+            path, query_string = path.split("?", 1)
+            query_params = query_string.split("&")
+            for param in query_params:
+                name, value = param.split("=")
+                queries.add_query(name, value)
+
         while True:
             header_line = await reader.readuntil(b"\r\n")
             header = header_line.decode().strip()
@@ -278,13 +484,6 @@ class Request:
                 content_type = header_value.casefold().strip()
             headers.add_header(header_name.strip(), header_value.strip())
         
-        if "?" in path:
-            path, query_string = path.split("?", 1)
-            query_params = query_string.split("&")
-            for param in query_params:
-                name, value = param.split("=")
-                queries.add_query(name, value)
-        
         if content_length is not None:
             if content_length > 0:
                 body_data = await reader.readexactly(content_length)
@@ -296,9 +495,10 @@ class Request:
             method,
             queries,
             headers,
+            [],
             body
         )
-
+    
 class Response:
     def __init__(
         self,
@@ -353,6 +553,10 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         traceback.print_exc()
         await Response(500).write_to_stream(writer)
 
+    
+class FastPy:
+    ...
+    
 async def main() -> None:
     server = await asyncio.start_server(handle_request, "localhost", 8080)
     addr = server.sockets[0].getsockname()
