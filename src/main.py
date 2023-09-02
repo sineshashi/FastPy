@@ -98,7 +98,7 @@ class PathParam:
         name: str,
         val: Any
     ) -> None:
-        self._name = name
+        self.name = name
         self.value = val
 
 class HeaderParam:
@@ -124,6 +124,8 @@ class Body:
         self.value = value
 
     def __str__(self) -> str:
+        if isinstance(self.value, BaseModel):
+            return self.value.model_dump_json()
         return json.dumps(self.value)
     
     def __repr__(self) -> str:
@@ -205,6 +207,9 @@ class Cookies:
     def update_cookie(self, name: str, value: Any) -> None:
         self._params[name] = Cookie(name, value)
 
+    def dict(self) -> Dict[str, Any]:
+        return {c.name: c.value for c in self._params.values()}
+
     @classmethod
     def from_string(cls, s: str) -> "Cookies":
         cookies = cls()
@@ -222,11 +227,20 @@ class QueryList:
         return self._queries.values()
     
     def add_query(self, name: str, value: Any, pre_defined: bool) -> None:
-        self._queries[name] = {name, Query(name, value, pre_defined)}
+        self._queries[name] = Query(name, value, pre_defined)
+
+    def dict(self) -> None:
+        return {q.name: q.value for q in self._queries.values()}
     
 class PathList:
     def __init__(self, path_params: List[PathParam] = []) -> None:
-        self._path_params = path_params
+        self._path_params = {p.name: p for p in path_params}
+
+    def add_path(self, name: str, value: Any) -> None:
+        self._path_params[name] = PathParam(name, value)
+
+    def dict(self) -> Dict[str, Any]:
+        return {p.name: p.value for p in self._path_params.values()}
 
 class Headers:
     def __init__(self, cookies: Optional[Cookies]=None, header_params: List[HeaderParam] = []) -> None:
@@ -249,18 +263,26 @@ class Headers:
     def set_cookies(self, cookies=Cookies) -> None:
         self.cookies = cookies
 
+    def dict(self) -> Dict[str, Any]:
+        d = self.cookies.dict()
+        for h in self.header_params.values():
+            d[h.name] = h.value
+        return d
+
 class PathInfo:
     def __init__(
         self, 
         route: str,
         handler: Callable,
-        path_params: Set[str] = set(),
+        path_params: Tuple[str] = Tuple(),
         query_params: Set[str] = set(),
         headers: Set[str] = set(),
         cookies: Set[str] = set(),
         defaults: Dict[str, Any] = {},
         var_types: Dict[str, Callable] = {},
-        body: Optional[str] = None
+        body: Optional[str] = None,
+        response_model: Optional[BaseModel] = None,
+        request_param: Optional[str] = None
     ) -> None:
         self.route = route
         self.path_params = path_params
@@ -271,6 +293,17 @@ class PathInfo:
         self.var_types = var_types
         self.handler = handler
         self.body = body
+        self.response_model = response_model
+        self.request_param = request_param
+
+    def verify_path_params(self, *args) -> PathList:
+        path = PathList()
+        for p, pval in zip(self.path_params, args):
+            try:
+                path.add_path(p, self.var_types[p](pval))
+            except:
+                raise Exception("Change to better exception.")
+        return path
 
     def verify_query_params(self, **kwargs) -> QueryList:
         query_list = QueryList()
@@ -330,9 +363,9 @@ class PathInfo:
                 headers.add_header(extra_h, kwargs[extra_h])
         return headers
     
-    def verify_body(self, name: str, value: Any) -> Body:
-        if self.body is not None and self.body != name:
-            var_type = self.var_types[name]
+    def verify_body(self, value: Any) -> Body:
+        if self.body is not None:
+            var_type = self.var_types[self.body]
             try:
                 return Body(var_type.parse_obj(value))
             except:
@@ -362,6 +395,7 @@ class RegisteredPaths:
         headers = set()
         cookies = set()
         body = None
+        request = None
         for arg, default in zip(args[-len(defaults):], defaults):
             defaults_dict[arg] = default
         for varname, _ in annotations.items():
@@ -370,12 +404,17 @@ class RegisteredPaths:
                 headers.add(varname)
             elif isinstance(default, Cookies):
                 cookies.add(varname)
-            elif default in params:
+            elif default in params or "return" == varname:
                 continue
             elif isinstance(default, BaseModel):
-                body = default
+                body = varname
+            elif annotations[varname] == Request:
+                request = varname
             else:
                 queries.add(varname)
+        response_model = None
+        if "return" in annotations:
+            response_model = annotations["return"]
         self.paths[original_route].append(PathInfo(
             route=route,
             handler=function,
@@ -385,7 +424,9 @@ class RegisteredPaths:
             cookies=cookies,
             defaults=defaults_dict,
             var_types=annotations,
-            body=body
+            body=body,
+            response_model=response_model,
+            request_param=request
         ))
 
     def get_api_path_info(self, route: str) -> Optional[PathInfo]:
@@ -433,26 +474,48 @@ class Request:
         method: Method,
         queries: QueryList,
         headers: Headers,
-        paths: PathList,
-        body: Optional[Body]=None
+        path_params: PathList,
+        path_info: PathInfo,
+        body: Body
     ) -> None:
         self.path = path
         self.method = method
         self.queries = queries
         self.headers = headers
         self.body = body
+        self.path_params = path_params
+        self._path_info = path_info
+
+    @property
+    def params(self) -> Set[str]:
+        return self._path_info.var_types.keys()
+    
+    @property
+    def annotations(self) -> Dict[str, Callable]:
+        return self._path_info.var_types
+
+    @property
+    def handler(self) -> Callable:
+        return self._path_info.handler
 
     @property
     def cookies(self) -> Cookies:
         return self.headers.cookies
+    
+    @property
+    def request_param(self) -> Optional[str]:
+        return self._path_info.request_param
+    
+    @property
+    def body_param(self) -> Optional[str]:
+        return self._path_info.body
 
     @classmethod
     async def load_from_reader(cls, reader: asyncio.StreamReader, all_path_info: MethodWisePathsInfo) -> "Request":
         request_line = await reader.readuntil(b"\r\n")
         method, path, _ = request_line.decode().strip().split(" ")
-        headers = Headers()
-        queries = QueryList()
-        cookies = Cookies()
+        headers = {}
+        queries = {}
         body = None
         content_length = None
         content_type = None
@@ -466,7 +529,7 @@ class Request:
             query_params = query_string.split("&")
             for param in query_params:
                 name, value = param.split("=")
-                queries.add_query(name, value)
+                queries[name] = value
 
         while True:
             header_line = await reader.readuntil(b"\r\n")
@@ -475,14 +538,11 @@ class Request:
                 break
 
             header_name, header_value = header.split(":", 1)
-            if header_name.casefold().strip() == "cookie":
-                cookies = Cookies.from_string(header_value)
-                headers.set_cookies(cookies)
             if header_name.casefold().strip() == "content-length":
                 content_length = int(header_value.strip())
             if header_name.casefold().strip() == "content-type":
                 content_type = header_value.casefold().strip()
-            headers.add_header(header_name.strip(), header_value.strip())
+            headers[header_name.strip()] = header_value.strip()
         
         if content_length is not None:
             if content_length > 0:
@@ -490,13 +550,24 @@ class Request:
                 if content_type is not None:
                     if "application/json" in content_type:
                         body = json.loads(body_data)
+        
+        number_of_path_params = len(path_info.path_params)
+        splits = path.split("/")
+        path_vals = splits[-number_of_path_params:]
+        route = "/".join(splits[:-number_of_path_params])
+
+        verified_path_params = path_info.verify_path_params(*path_vals)
+        verified_query_params = path_info.verify_query_params(**queries)
+        verified_headers = path_info.verify_headers(**headers)
+        verified_body = path_info.verify_body(body)       
         return cls(
-            path,
+            route,
             method,
-            queries,
-            headers,
-            [],
-            body
+            verified_query_params,
+            verified_headers,
+            verified_path_params,
+            path_info,
+            verified_body
         )
     
 class Response:
@@ -539,24 +610,87 @@ class Response:
         s += str(self.reponse_body)
         return s 
 
+class FastPy:
+    def __init__(self) -> None:
+        self._method_wise_path_info = MethodWisePathsInfo()
+
+    def add_api_route(self, method: Method, path: str, handler: Callable) -> None:
+        self._method_wise_path_info.add_api_route(method, path, handler)
+
+    def get(self, route: str, function: Callable) -> None:
+        self.add_api_route(Method.GET, route, function)
+    
+    def post(self, route: str, function: Callable) -> None:
+        self.add_api_route(Method.POST, route, function)
+
+    def put(self, route: str, function: Callable) -> None:
+        self.add_api_route(Method.PUT, route, function)
+
+    def patch(self, route: str, function: Callable) -> None:
+        self.add_api_route(Method.PATCH, route, function)
+
+    def delete(self, route: str, function: Callable) -> None:
+        self.add_api_route(Method.DELETE, route, function)
+
+
 async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
-        request = await Request.load_from_reader(reader)
-        response = Response(
-            status_code=200,
-            headers = Headers(cookies=None, header_params=[HeaderParam("Content-Type", "Application/Json")]),
-            response_body=request.body
-        )
-        await response.write_to_stream(writer)
+        request: Request = await Request.load_from_reader(reader)
+        param_val_dict = {
+            **request.path_params.dict(),
+            **request.queries.dict(),
+            **request.headers.dict()
+        }
+
+        kwargs = {}
+        for varname, _ in request.annotations.items():
+            if varname in param_val_dict:
+                kwargs[varname] = param_val_dict[varname]
+            else:
+                if varname == request.body_param:
+                    kwargs[varname] = request.body.value
+                elif varname == request.request_param:
+                    kwargs[varname] = request
+                elif varname == "return":
+                    continue
+                else:
+                    raise Exception("A better exception.")
+        try:
+            if inspect.isawaitable(request.handler):
+                res = await request.handler(**kwargs)
+            else:
+                res = request.handler(**kwargs)
+            if "return" in request.annotations:
+                return_type = request.annotations["return"]
+                if return_type is None and res is not None:
+                    raise Exception()
+                elif issubclass(return_type, BaseModel):
+                    if isinstance(res, return_type):
+                        pass
+                    else:
+                        try:
+                            res = return_type(res)
+                        except:
+                            raise Exception()
+                else:
+                    try:
+                        res = return_type(res)
+                    except:
+                        raise Exception()
+            if not isinstance(res, Response):
+                res = Response(
+                    200, 
+                    Headers(cookies=None, header_params=[HeaderParam("Content-Type", "Application/Json")]), 
+                    Body(res)
+                )
+        except:
+            res = Exception() #Write better exception handler
+        await res.write_to_stream(writer)
     except Exception as e:
         print(e)
         traceback.print_exc()
         await Response(500).write_to_stream(writer)
 
-    
-class FastPy:
-    ...
-    
 async def main() -> None:
     server = await asyncio.start_server(handle_request, "localhost", 8080)
     addr = server.sockets[0].getsockname()
