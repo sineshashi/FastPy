@@ -23,7 +23,7 @@ class FastPy:
             return None
         return wrapper
 
-    def post(self, route: str, function: Callable) -> None:
+    def post(self, route: str) -> None:
         def wrapper(function: Callable):
             self.add_api_route(Method.POST, route, function)
             return None
@@ -92,7 +92,10 @@ class RequestHandler:
                         pass
                     else:
                         try:
-                            res = return_type.model_validate_json(res)
+                            if isinstance(res, str):
+                                res = return_type.model_validate_json(res)
+                            else:
+                                res = return_type.model_validate(res)
                         except Exception as e:
                             raise HttpException(
                                 500, f"Return type could not be verified. Expected {return_type}, Found {type(res)}"

@@ -117,7 +117,10 @@ class PathInfo:
         if self.body is not None:
             var_type = self.var_types[self.body]
             try:
-                return Body(var_type.model_validate_json(value))
+                if isinstance(value, str):
+                    return Body(var_type.model_validate_json(value))
+                else:
+                    return Body(var_type.model_validate(value))
             except Exception as e:
                 print(e)
                 raise HttpException(422, str(e))
@@ -152,7 +155,7 @@ class RegisteredPaths:
         request = None
         for arg, default in zip(args[-len(defaults):], defaults):
             defaults_dict[arg] = default
-        for varname, _ in annotations.items():
+        for varname, var_type in annotations.items():
             default = defaults_dict.get(varname)
             if isinstance(default, Headers):
                 headers.add(varname)
@@ -160,7 +163,7 @@ class RegisteredPaths:
                 cookies.add(varname)
             elif varname in params or "return" == varname:
                 continue
-            elif isinstance(default, BaseModel):
+            elif issubclass(var_type, BaseModel):
                 body = varname
             elif annotations[varname] == Request:
                 request = varname

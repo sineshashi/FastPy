@@ -204,4 +204,6 @@ class Headers:
         d = self.cookies.dict()
         for h in self.header_params.values():
             d[h.name] = h.value
+        if "cookie" in d:
+            del d["cookie"]
         return d
