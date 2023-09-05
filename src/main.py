@@ -15,33 +15,64 @@ class FastPy:
         self._method_wise_path_info = MethodWisePathsInfo()
 
     def add_api_route(self, method: Method, path: str, handler: Callable) -> None:
+        '''Add new API route.'''
         self._method_wise_path_info.add_api_route(method, path, handler)
 
     def get(self, route: str) -> None:
+        '''
+        This defines a new route with get method. Can be used as
+        @app.get("/path")
+        async def handler():
+            ...
+        '''
         def wrapper(function: Callable):
             self.add_api_route(Method.GET, route, function)
             return None
         return wrapper
 
     def post(self, route: str) -> None:
+        '''
+        This defines a new route with post method. Can be used as
+        @app.post("/path")
+        async def handler():
+            ...
+        '''
         def wrapper(function: Callable):
             self.add_api_route(Method.POST, route, function)
             return None
         return wrapper
 
     def put(self, route: str) -> None:
+        '''
+        This defines a new route with put method. Can be used as
+        @app.put("/path")
+        async def handler():
+            ...
+        '''
         def wrapper(function: Callable):
             self.add_api_route(Method.PUT, route, function)
             return None
         return wrapper
 
     def patch(self, route: str) -> None:
+        '''
+        This defines a new route with patch method. Can be used as
+        @app.patch("/path")
+        async def handler():
+            ...
+        '''
         def wrapper(function: Callable):
             self.add_api_route(Method.PATCH, route, function)
             return None
         return wrapper
 
     def delete(self, route: str) -> None:
+        '''
+        This defines a new route with delete method. Can be used as
+        @app.delete("/path")
+        async def handler():
+            ...
+        '''
         def wrapper(function: Callable):
             self.add_api_route(Method.DELETE, route, function)
             return None
@@ -142,4 +173,7 @@ def start_server(
     host: str = "localhost",
     port: int = 8080
 ) -> None:
+    '''
+    Starts a web server at given host and port and maps the given app with this port.
+    '''
     asyncio.run(_start_server(app, host, port))

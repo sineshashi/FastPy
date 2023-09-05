@@ -16,6 +16,9 @@ class Method(str, enum.Enum):
 
 
 class PathInfo:
+    '''
+    This class is responsible for saving all the meta data regarding a defined route and its handler.
+    '''
     def __init__(
         self,
         route: str,
@@ -43,6 +46,9 @@ class PathInfo:
         self.request_param = request_param
 
     def verify_path_params(self, *args) -> PathList:
+        '''
+        Validates the path params.
+        '''
         path = PathList()
         for p, pval in zip(self.path_params, args):
             try:
@@ -129,6 +135,7 @@ class PathInfo:
 
 
 class RegisteredPaths:
+    '''This class is responsible for storing path info in a dict with key being the base path.'''
     def __init__(self) -> None:
         self.paths: Dict[str, List[PathInfo]] = {}
 
@@ -139,6 +146,9 @@ class RegisteredPaths:
         return parts[0], variable_names
 
     def add_api_route(self, route: str, function: Callable) -> None:
+        '''
+        Adds new route and given function will be called when this route is hit.
+        '''
         from .requests import Request
         original_route, params = self._get_path_params(route)
         params = set(params)
@@ -193,6 +203,9 @@ class RegisteredPaths:
             self.paths[original_route] = [path_info]
 
     def get_api_path_info(self, route: str) -> Optional[PathInfo]:
+        '''
+        Returns PathInfo for given route without query params.
+        '''
         if route.endswith("/"):
             route = route[:-1]
         parts = route.split("/")
@@ -217,6 +230,9 @@ class RegisteredPaths:
 
 
 class MethodWisePathsInfo:
+    '''
+    This class Stores all the paths in method wise manner.
+    '''
     def __init__(self) -> None:
         self.paths: Dict[Method, RegisteredPaths] = {
             method: RegisteredPaths() for method in Method._member_names_
