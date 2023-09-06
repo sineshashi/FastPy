@@ -1,4 +1,4 @@
-from .main import FastPy, start_server
+from .main import FastPy
 from .requests import Request
 from .responses import Response
 from .params import Headers, Cookies

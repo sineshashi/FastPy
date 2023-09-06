@@ -1,14 +1,13 @@
 import asyncio
 import traceback
 import inspect
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Any
 from pydantic import BaseModel
 from .core import MethodWisePathsInfo, Method
 from .requests import Request
 from .responses import Response
 from .params import HeaderParam, Headers, Body
 from .exceptions import HttpException
-
 
 class FastPy:
     def __init__(self) -> None:
@@ -77,6 +76,9 @@ class FastPy:
             self.add_api_route(Method.DELETE, route, function)
             return None
         return wrapper
+    
+    def run(self, host: str="localhost", port: int=8080, debug=False) -> None:
+        ServerHandler(self, host, port, debug).start_server()
 
 
 class RequestHandler:
@@ -87,28 +89,33 @@ class RequestHandler:
         cls._app = app
 
     @classmethod
-    async def handle_request(cls, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        try:
-            request: Request = await Request.load_from_reader(reader, cls._app._method_wise_path_info)
-            param_val_dict = {
+    def get_valid_params_dict(cls, request: Request) -> Dict[str, Any]:
+        param_val_dict = {
                 **request.path_params.dict(),
                 **request.queries.dict(),
                 **request.headers.dict()
             }
 
-            kwargs = {}
-            for varname, _ in request.annotations.items():
-                if varname in param_val_dict:
-                    kwargs[varname] = param_val_dict[varname]
+        kwargs = {}
+        for varname, _ in request.annotations.items():
+            if varname in param_val_dict:
+                kwargs[varname] = param_val_dict[varname]
+            else:
+                if varname == request.body_param:
+                    kwargs[varname] = request.body.value
+                elif varname == request.request_param:
+                    kwargs[varname] = request
+                elif varname == "return":
+                    continue
                 else:
-                    if varname == request.body_param:
-                        kwargs[varname] = request.body.value
-                    elif varname == request.request_param:
-                        kwargs[varname] = request
-                    elif varname == "return":
-                        continue
-                    else:
-                        raise HttpException(422, f"{varname} not provided.")
+                    raise HttpException(422, f"{varname} not provided.")
+        return kwargs
+
+    @classmethod
+    async def handle_request(cls, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            request: Request = await Request.load_from_reader(reader, cls._app._method_wise_path_info)
+            kwargs = cls.get_valid_params_dict(request)
             if inspect.isawaitable(request.handler) or inspect.iscoroutinefunction(request.handler) or inspect.iscoroutine(request.handler):
                 res = await request.handler(**kwargs)
             else:
@@ -154,26 +161,37 @@ class RequestHandler:
             traceback.print_exc()
             await Response(500).write_to_stream(writer)
 
+class ServerHandler:
+    server = None
 
-async def _start_server(
-    app: FastPy,
-    host: str,
-    port: int
-) -> None:
-    RequestHandler.set_app(app)
-    server = await asyncio.start_server(RequestHandler.handle_request, host, port)
-    addr = server.sockets[0].getsockname()
-    print("Server running at", addr)
-    async with server:
-        await server.serve_forever()
+    def __init__(
+        self,
+        app: FastPy,
+        host: str, 
+        port: int,
+        debug: bool
+    )-> None:
+        ServerHandler.app = app
+        ServerHandler.host = host
+        ServerHandler.port = port
+        ServerHandler.debug = debug
 
+    @classmethod
+    async def _start_server(
+        cls
+    ) -> None:
+        RequestHandler.set_app(cls.app)
+        server = await asyncio.start_server(RequestHandler.handle_request, cls.host, cls.port)
+        addr = server.sockets[0].getsockname()
+        print("Server running at", addr)
+        async with server:
+            await server.serve_forever()
 
-def start_server(
-    app: FastPy,
-    host: str = "localhost",
-    port: int = 8080
-) -> None:
-    '''
-    Starts a web server at given host and port and maps the given app with this port.
-    '''
-    asyncio.run(_start_server(app, host, port))
+    @classmethod
+    def start_server(
+        cls
+    ) -> None:
+        '''
+        Starts a web server at given host and port and maps the given app with this port.
+        '''
+        cls.server = asyncio.create_task(asyncio.run(cls._start_server()))

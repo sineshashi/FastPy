@@ -139,6 +139,12 @@ class RegisteredPaths:
     def __init__(self) -> None:
         self.paths: Dict[str, List[PathInfo]] = {}
 
+    def __len__(self) -> int:
+        cnt = 0
+        for _, paths in self.paths.items():
+            cnt += len(paths)
+        return cnt
+
     def _get_path_params(self, route: str) -> Tuple[str, Tuple[str]]:
         pattern = r'\{([^{}]+)\}'
         parts = re.split(pattern, route, 1)
@@ -237,6 +243,12 @@ class MethodWisePathsInfo:
         self.paths: Dict[Method, RegisteredPaths] = {
             method: RegisteredPaths() for method in Method._member_names_
         }
+
+    def __len__(self) -> int:
+        l = 0
+        for _, p in self.paths.items():
+            l += len(p)
+        return l
 
     def add_api_route(self, method: Method, route: str, function: Callable) -> None:
         self.paths[method].add_api_route(route, function)

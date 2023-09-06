@@ -40,6 +40,7 @@ class Response:
     def __str__(self) -> str:
         s = f"HTTP/1.1 {self.status_code} {HTTP_STATUS_CODES[self.status_code]}\r\n"
         s += str(self.headers)
-        s += "\r\n"
-        s += str(self.reponse_body)
+        if self.reponse_body is not None and self.reponse_body.value is not None:
+            s += "\r\n"
+            s += str(self.reponse_body)
         return s

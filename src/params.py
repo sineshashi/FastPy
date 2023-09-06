@@ -58,7 +58,9 @@ class Body:
     def __str__(self) -> str:
         if isinstance(self.value, BaseModel):
             return self.value.model_dump_json()
-        return json.dumps(self.value)
+        elif not isinstance(self.value, str):
+            return json.dumps(self.value)
+        return self.value
 
     def __repr__(self) -> str:
         return str(self)
