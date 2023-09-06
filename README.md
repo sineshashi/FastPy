@@ -168,7 +168,7 @@ FastPy is intended for educational purposes and may not be suitable for producti
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](https://github.com/sineshashi/FastPy/blob/master/README.md) file for details.
+This project is licensed under the MIT License. See the [LICENSE](https://github.com/sineshashi/FastPy/blob/master/LICENSE) file for details.
 
 ## Acknowledgments
 
