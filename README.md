@@ -146,7 +146,7 @@ async def create_student(request: Request):
 
 To raise exceptions with appropriate code and messages, `HttpException` class has been defined.
 
-```
+```python
 from src import Request, HttpException
 
 @app.post("/create")
