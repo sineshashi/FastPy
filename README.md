@@ -1,6 +1,6 @@
-# FastPy - A Simple Python Web Framework
+# FastPy-Rest - A Simple Python Web Framework
 
-FastPy is a lightweight Python web framework designed for educational purposes. It provides a simple and easy-to-understand structure to help you learn the fundamentals of building a web framework from scratch. With FastPy, you can explore various aspects of web development, including routing, request handling, response generation, and more.
+[FastPy-Rest]() is a lightweight Python web framework designed for educational purposes. It provides a simple and easy-to-understand structure to help you learn the fundamentals of building a web framework from scratch. With FastPy, you can explore various aspects of web development, including routing, request handling, response generation, and more.
 
 ## Features
 
@@ -15,13 +15,12 @@ FastPy is a lightweight Python web framework designed for educational purposes. 
 
 To get started with FastPy, follow these steps:
 
-1. Clone the FastPy repository
-2. Install the required dependencies: `pip install -r requirements.txt`
-3. Create your own routes and handlers
-4. Start the server
+1. Install the package with `pip install fastpy-rest`
+2. Create your own routes and handlers
+3. Start the server
 
    ```python
-   from src import FastPy
+   from fastpy_rest import FastPy
 
    app = FastPy()
 
@@ -91,7 +90,7 @@ async def create_student(student: StudentIn):
 Parameters with primitive type annotations along with default value of `Headers` will be extracted from headers.
 
 ```python
-from src import Headers
+from fastpy_rest import Headers
 
 @app.get("/path")
 async def handler(authorization: str = Headers())):
@@ -123,7 +122,7 @@ async def create_student(student: StudentIn) -> StudentIn:
 To avoid the data validation, `Request` class can be used in annotations and in handler, request object will be provider with parsed path, query and other params.
 
 ```python
-from src import Request
+from fastpy_rest import Request
 
 @app.post("/create")
 async def create_student(request: Request):
@@ -135,7 +134,7 @@ async def create_student(request: Request):
 To send custom status code for success (default=200), Response class object should be returned from handler. In this case, return type will not be validated.
 
 ```python
-from src import Request, Response
+from fastpy_rest import Request, Response
 
 @app.post("/create")
 async def create_student(request: Request):
@@ -147,7 +146,7 @@ async def create_student(request: Request):
 To raise exceptions with appropriate code and messages, `HttpException` class has been defined.
 
 ```python
-from src import Request, HttpException
+from fastpy_rest import Request, HttpException
 
 @app.post("/create")
 async def create_student(request: Request):

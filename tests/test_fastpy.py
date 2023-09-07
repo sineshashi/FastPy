@@ -4,13 +4,13 @@ sys.path.append('../')
 
 
 import unittest, asyncio
-from src.main import FastPy, start_server, RequestHandler
-from src.responses import Response
-from src.params import Headers, Body, Cookies, PathList, PathParam, QueryList
-from src.exceptions import HttpException
-from src.core import Method
-from src.requests import Request
-from src.status_codes import HTTP_STATUS_CODES
+from src.fastpy_rest.main import FastPy, RequestHandler
+from src.fastpy_rest.responses import Response
+from src.fastpy_rest.params import Headers, Body, Cookies, PathList, PathParam, QueryList
+from src.fastpy_rest.exceptions import HttpException
+from src.fastpy_rest.core import Method
+from src.fastpy_rest.requests import Request
+from src.fastpy_rest.status_codes import HTTP_STATUS_CODES
 
 class TestFastPy(unittest.TestCase):
 

@@ -1,4 +1,4 @@
-from src import FastPy, Headers, Cookies, HttpException
+from src.fastpy_rest import FastPy, Headers, Cookies, HttpException
 from pydantic import BaseModel
 
 class StudentIn(BaseModel):
